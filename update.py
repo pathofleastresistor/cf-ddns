@@ -5,6 +5,7 @@ import sys
 import re
 from retrying import retry
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,6 +15,8 @@ load_dotenv()
 
 # Accessing the environment variable
 CLOUDFLARE_TOKEN = os.getenv('CLOUDFLARE_API_TOKEN')
+DRY_RUN = os.getenv('DRY_RUN', 'false')
+FORCE_UPDATE = os.getenv('FORCE_UPDATE', 'false')
 
 if not CLOUDFLARE_TOKEN:
     print("Cloudflare API token not set.")
@@ -67,16 +70,21 @@ def get_zones():
     return zones
 
 def update_dns_record(zone_id, record_id, new_data):
-    """Update a specific DNS record."""
-    update_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}"
-    try:
-        response = requests.put(update_url, headers=HEADERS, json=new_data)
-        if response.status_code == 200:
-            logging.info(f"Updated DNS record: {new_data['name']} to {new_data['content']}")
-        else:
-            logging.error(f"Failed to update DNS record: {new_data['name']}")
-    except requests.RequestException as e:
-        logging.error(f"Error updating DNS record: {e}")
+
+    if DRY_RUN == 'true':
+        logging.info(f"[DRY RUN] Updated DNS record: {new_data['name']} to {new_data['content']}")
+        return
+    else:
+        """Update a specific DNS record."""
+        update_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}"
+        try:
+            response = requests.put(update_url, headers=HEADERS, json=new_data)
+            if response.status_code == 200:
+                logging.info(f"Updated DNS record: {new_data['name']} to {new_data['content']}")
+            else:
+                logging.error(f"Failed to update DNS record: {new_data['name']}")
+        except requests.RequestException as e:
+            logging.error(f"Error updating DNS record: {e}")
 
 def fetch_dns_records(zone_id):
     """Fetch all DNS records for a given zone."""
@@ -94,7 +102,27 @@ def fetch_dns_records(zone_id):
 
 def should_update_record(current_ip, record):
     """Determine whether the DNS record should be updated."""
+    if FORCE_UPDATE == 'true':
+        return True
+    
     return record['content'] != current_ip
+
+def extract_tld_and_record(domain):
+    """
+    Extracts the TLD and A record from a given domain string.
+    
+    Parameters:
+    domain (str): The full domain name from which to extract the TLD and A record.
+    
+    Returns:
+    tuple: A tuple containing the TLD and A record as two separate values.
+    """
+    parsed_url = urlparse('//' + domain)  # Ensure the domain is in a suitable format for parsing
+    domain_parts = parsed_url.netloc.split('.')
+    tld = '.' + domain_parts[-1]  # TLD is the last part
+    a_record = '.'.join(domain_parts[:-1])  # A record is the remaining part(s)
+    
+    return tld, a_record
 
 def main():
     if not CLOUDFLARE_TOKEN:
@@ -120,7 +148,6 @@ def main():
                 update_dns_record(zone_id, record['id'], new_record_data)
             else:
                 logging.info(f"No update needed for {record['name']} (IP matches current public IP)")
-
 
 if __name__ == "__main__":
     main()
