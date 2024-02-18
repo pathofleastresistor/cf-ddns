@@ -1,23 +1,20 @@
-# Use an official Python runtime as a parent image
-FROM python:3.9-slim
+FROM python:3.9-alpine
 
-# Install cron
-RUN apt-get update && apt-get install -y cron
+# Install cron and msmtp
+RUN apk update \
+    && apk add --no-cache dcron msmtp
 
-# Set the working directory in the container
+# Set the working directory
 WORKDIR /usr/src/app
 
-# Copy the current directory contents into the container at /usr/src/app
+# Copy the Python script, crontab, and msmtp configuration
 COPY . .
 
-# Install any needed packages specified in requirements.txt
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy startup script
-COPY startup.sh /usr/src/app/startup.sh
+# Copy and set permissions for the startup script
+COPY startup.sh /startup.sh
+RUN chmod +x /startup.sh
 
-# Make startup script executable
-RUN chmod +x /usr/src/app/startup.sh
-
-# Run the startup script
-CMD ["/usr/src/app/startup.sh"]
+CMD ["/startup.sh"]
