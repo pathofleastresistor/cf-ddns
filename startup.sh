@@ -12,7 +12,7 @@ else
 fi
 
 # Create a new crontab entry using the CRON_SCHEDULE environment variable
-echo "$CRON_SCHEDULE /usr/bin/python3 /usr/src/app/update.py >> /var/log/cron.log 2>&1" | crontab -
+echo "$CRON_SCHEDULE /usr/local/bin/python3 /usr/src/app/update.py >> /var/log/cron.log 2>&1" | crontab -
 
 # Make sure the cron log file exists
 touch /var/log/cron.log
