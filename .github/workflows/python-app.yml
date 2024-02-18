@@ -18,5 +18,7 @@ jobs:
         pip install -r requirements.txt
         pip install pytest
     - name: Run tests
+      env:
+        CLOUDFLARE_API_TOKEN: 123  # Use the secret here
       run: |
         pytest
