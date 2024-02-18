@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  cf-ddns:
+    build: .
+    environment:
+      - CLOUDFLARE_API_TOKEN
+      - CRON_SCHEDULE=*/5 * * * *
+    restart: unless-stopped

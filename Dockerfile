@@ -1,6 +1,9 @@
 # Use an official Python runtime as a parent image
 FROM python:3.9-slim
 
+# Install cron
+RUN apt-get update && apt-get install -y cron
+
 # Set the working directory in the container
 WORKDIR /usr/src/app
 
@@ -10,13 +13,11 @@ COPY . .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Make port 80 available to the world outside this container
-# This step can be skipped if your script does not serve a web application
-# EXPOSE 80
+# Copy startup script
+COPY startup.sh /usr/src/app/startup.sh
 
-# Define environment variable
-# Use this step if you want to set a default value or ensure it exists, but remember to pass actual values at runtime
-# ENV CLOUDFLARE_API_TOKEN="YourTokenHere"
+# Make startup script executable
+RUN chmod +x /usr/src/app/startup.sh
 
-# Run script.py when the container launches
-CMD ["python", "./update.py"]
+# Run the startup script
+CMD ["/usr/src/app/startup.sh"]
