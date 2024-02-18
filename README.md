@@ -1,3 +1,5 @@
+[![App Test](https://github.com/pathofleastresistor/cf-ddns/actions/workflows/python-app.yml/badge.svg)](https://github.com/pathofleastresistor/cf-ddns/actions/workflows/python-app.yml)
+
 This repository allows the user to update A records on Cloudflare to current IP of the server, commonly called Dynamic DNS.
 
 ### Getting a Cloudflare API token
