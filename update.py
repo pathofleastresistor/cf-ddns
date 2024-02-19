@@ -116,7 +116,8 @@ def extract_zone_and_fqdn(fqdn):
     return domain, fqdn
 
 def group_fqdn_by_zone(fqdns_string):
-    fqdns_list = fqdns_string.split(',')
+    formatted_fqdns = ''.join(fqdns_string.split())
+    fqdns_list = formatted_fqdns.split(',')
     domain_groups = {}
 
     for fqdn in fqdns_list:
