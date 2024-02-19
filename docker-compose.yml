@@ -7,4 +7,7 @@ services:
       - CLOUDFLARE_API_TOKEN
       - CRON_SCHEDULE
       - RUN_AT_STARTUP
+      - CLOUDFLARE_FQDNS
+      - FORCE_UPDATE
+      - DRY_RUN
     restart: unless-stopped
