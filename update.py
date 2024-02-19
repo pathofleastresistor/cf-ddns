@@ -17,6 +17,7 @@ load_dotenv()
 CLOUDFLARE_TOKEN = os.getenv('CLOUDFLARE_API_TOKEN')
 DRY_RUN = os.getenv('DRY_RUN', 'false')
 FORCE_UPDATE = os.getenv('FORCE_UPDATE', 'false')
+CLOUDFLARE_FQDNS = os.getenv('CLOUDFLARE_FQDNS', '')
 
 if not CLOUDFLARE_TOKEN:
     print("Cloudflare API token not set.")
@@ -57,13 +58,13 @@ def get_public_ip():
 
 def get_zones():
     """Retrieve all zones (domains) managed in Cloudflare."""
-    zones = []
+    zones = {}
     list_zones_url = 'https://api.cloudflare.com/client/v4/zones'
     try:
         response = requests.get(list_zones_url, headers=HEADERS)
         zones_data = response.json().get('result', [])
         for zone in zones_data:
-            zones.append((zone['id'], zone['name']))
+            zones[zone['name']] = zone['id']
     except requests.RequestException as e:
         logging.error(f"Failed to fetch zones: {e}")
         sys.exit(1)
@@ -107,22 +108,30 @@ def should_update_record(current_ip, record):
     
     return record['content'] != current_ip
 
-def extract_tld_and_record(domain):
-    """
-    Extracts the TLD and A record from a given domain string.
-    
-    Parameters:
-    domain (str): The full domain name from which to extract the TLD and A record.
-    
-    Returns:
-    tuple: A tuple containing the TLD and A record as two separate values.
-    """
-    parsed_url = urlparse('//' + domain)  # Ensure the domain is in a suitable format for parsing
+def extract_zone_and_fqdn(fqdn):
+    parsed_url = urlparse('//' + fqdn)
     domain_parts = parsed_url.netloc.split('.')
-    tld = '.' + domain_parts[-1]  # TLD is the last part
-    a_record = '.'.join(domain_parts[:-1])  # A record is the remaining part(s)
+    domain = '.'.join(domain_parts[-2:])
     
-    return tld, a_record
+    return domain, fqdn
+
+def group_fqdn_by_zone(fqdns_string):
+    fqdns_list = fqdns_string.split(',')
+    domain_groups = {}
+
+    for fqdn in fqdns_list:
+        domain, a_record = extract_zone_and_fqdn(fqdn.strip())
+        if domain in domain_groups:
+            if a_record:  # Add the A record if it's not an empty string
+                domain_groups[domain].append(a_record)
+        else:
+            domain_groups[domain] = [a_record] if a_record else []
+
+    # Optionally, remove duplicates by converting lists to sets and back to lists
+    for domain in domain_groups:
+        domain_groups[domain] = list(set(domain_groups[domain]))
+
+    return domain_groups
 
 def main():
     if not CLOUDFLARE_TOKEN:
@@ -131,23 +140,36 @@ def main():
     
     public_ip = get_public_ip()
     logging.info(f"Current public IP: {public_ip}")
-    zones = get_zones()
 
-    for zone_id, zone_name in zones:
-        logging.info(f"Processing zone: {zone_name}")
-        dns_records = fetch_dns_records(zone_id)
-        for record in dns_records:
-            if should_update_record(public_ip, record):
-                new_record_data = {
-                    'type': 'A',
-                    'name': record['name'],
-                    'content': public_ip,
-                    'ttl': record['ttl'],
-                    'proxied': record.get('proxied', False),
-                }
-                update_dns_record(zone_id, record['id'], new_record_data)
-            else:
-                logging.info(f"No update needed for {record['name']} (IP matches current public IP)")
+    requested_zones = group_fqdn_by_zone(CLOUDFLARE_FQDNS)
+    zones_dict = get_zones()
+
+    for zone_name in requested_zones:
+        if zone_name in zones_dict:
+            logging.info(f"Processing zone: {zone_name}")
+            zone_id = zones_dict[zone_name]
+            dns_records = fetch_dns_records(zone_id)
+            
+            for record in requested_zones[zone_name]:
+                dns_record = next((item for item in dns_records if item.get("name") == record), None)
+
+                if(dns_record is None):
+                    logging.error(f"{record} was not found.")
+                    continue
+                
+                if should_update_record(public_ip, dns_record):
+                    new_record_data = {
+                        'type': 'A',
+                        'name': dns_record['name'],
+                        'content': public_ip,
+                        'ttl': dns_record['ttl'],
+                        'proxied': dns_record.get('proxied', False),
+                    }
+                    update_dns_record(zone_id, dns_record['id'], new_record_data)
+                else:
+                    logging.info(f"No update needed for {dns_record['name']} (IP matches current public IP)")
+        else:
+            logging.error(f"Zone not found: {zone_name}")
 
 if __name__ == "__main__":
     main()
