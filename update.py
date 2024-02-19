@@ -20,7 +20,7 @@ FORCE_UPDATE = os.getenv('FORCE_UPDATE', 'false')
 CLOUDFLARE_FQDNS = os.getenv('CLOUDFLARE_FQDNS', '')
 
 if not CLOUDFLARE_TOKEN:
-    print("Cloudflare API token not set.")
+    logging.error("Cloudflare API token not set.")
     exit(1)
 
 HEADERS = {
@@ -53,7 +53,7 @@ def get_public_ip():
             if is_valid_ip(ip):
                 return ip
         except requests.RequestException as e:
-            logging.warning(f"Error fetching public IP from {service_url}: {e}")
+            logging.error(f"Error fetching public IP from {service_url}: {e}")
     raise Exception("Failed to fetch public IP after multiple attempts.")
 
 def get_zones():
