@@ -1,7 +1,10 @@
 FROM python:3.9-alpine
 
 RUN apk add --no-cache tzdata
-ENV TZ=America/Los_Angeles
+ENV TZ=UTC
+
+# Set the timezone of the container 
+RUN ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # Install cron and msmtp
 RUN apk update \
