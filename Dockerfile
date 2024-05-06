@@ -1,5 +1,8 @@
 FROM python:3.9-alpine
 
+RUN apk add --no-cache tzdata
+ENV TZ=America/Los_Angeles
+
 # Install cron and msmtp
 RUN apk update \
     && apk add --no-cache dcron msmtp
