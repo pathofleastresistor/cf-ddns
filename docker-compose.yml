@@ -1,13 +1,6 @@
-version: '3.8'
-
 services:
   cf-ddns:
     build: .
-    environment:
-      - CLOUDFLARE_API_TOKEN
-      - CRON_SCHEDULE
-      - RUN_AT_STARTUP
-      - CLOUDFLARE_FQDNS
-      - FORCE_UPDATE
-      - DRY_RUN
+    env_file:
+      - .env
     restart: unless-stopped
