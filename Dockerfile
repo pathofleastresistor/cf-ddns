@@ -6,10 +6,6 @@ ENV TZ=UTC
 # Set the timezone of the container 
 RUN ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install cron and msmtp
-RUN apk update \
-    && apk add --no-cache dcron msmtp
-
 # Set the working directory
 WORKDIR /usr/src/app
 

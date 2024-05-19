@@ -4,3 +4,10 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    networks:
+      - cf-ddns
+
+networks:
+  cf-ddns:
