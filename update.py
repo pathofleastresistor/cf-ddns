@@ -115,7 +115,8 @@ def fetch_dns_records(zone_id):
 
 def filter_dns_records(dns_records, zone_name):
     """Filter DNS records based on zone name."""
-    return [record for record in dns_records if record["name"] == zone_name]
+    # return [record for record in dns_records if record["name"] == zone_name]
+    return [record for record in dns_records]
 
 
 def should_update_record(current_ip, record):
