@@ -1,13 +1,14 @@
 services:
   cf-ddns:
     build: .
+    container_name: cloudflare-ddns
     env_file:
       - .env
     restart: unless-stopped
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
-    networks:
-      - cf-ddns
 
 networks:
-  cf-ddns:
+  default:
+    external: true
+    name: nginx_proxy_manager
