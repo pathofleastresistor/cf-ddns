@@ -32,7 +32,6 @@ CRON_SCHEDULE won't do anything with this method, but you can create your own cr
 
 * `CLOUDFLARE_API_TOKEN`: the token you create in Cloudflare. Make sure the token is set up with Zone:Zone:Read and Zone:DNS:Edit
 * `CLOUDFLARE_FQDNS`: the list of FQDNs you want to update
-* `CRON_SCHEDULE`: the cron schedule for running the script inside the container
-* `RUN_AT_STARTUP`: when starting the container, set to "true" if you want to immediately run the script once. Otherwise set to `false`
+* `SLEEP`: how many seconds to wait between checks (default: 60)
 * `FORCE_UPDATE`: force updating the A records, even if they have the current IP address
 * `DRY_RUN`: set to "true" if you want to set the output the script without any changes being applied
