@@ -5,7 +5,7 @@ import time
 
 import requests
 from dotenv import load_dotenv
-from tenacity import Retrying, retry, stop_after_attempt, wait_exponential, wait_fixed
+from tenacity import retry, stop_after_attempt, wait_exponential, wait_fixed
 
 # Initialize logging
 logging.basicConfig(
@@ -18,6 +18,10 @@ CLOUDFLARE_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 FORCE_UPDATE = os.getenv("FORCE_UPDATE", "false").lower() == "true"
 CLOUDFLARE_FQDNS = os.getenv("CLOUDFLARE_FQDNS", "").split(",")
+# Only these record names are kept pointed at home. Other A records in the
+# same zones (e.g. labs.sohvarias.com on the droplet) are left alone.
+# Empty = update every A record in the listed zones (the old behaviour).
+CLOUDFLARE_RECORDS = {r.strip() for r in os.getenv("CLOUDFLARE_RECORDS", "").split(",") if r.strip()}
 try:
     SLEEP = int(os.getenv("SLEEP", 60))
 except ValueError:
@@ -130,10 +134,16 @@ def is_network_available():
         return False
 
 
+HEARTBEAT_FILE = "/tmp/heartbeat"
+
+
 def fetch_and_update_zones(public_ip, filtered_zones):
     for zone_name, zone_id in filtered_zones.items():
         logging.info(f"Processing zone: {zone_name}")
         for record in fetch_dns_records(zone_id):
+            if CLOUDFLARE_RECORDS and record["name"] not in CLOUDFLARE_RECORDS:
+                logging.info(f"Skipping {record['name']} (not in CLOUDFLARE_RECORDS)")
+                continue
             if should_update_record(public_ip, record):
                 new_record_data = {
                     "type": "A",
@@ -149,20 +159,25 @@ def fetch_and_update_zones(public_ip, filtered_zones):
                 )
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
+def try_update(public_ip, zones):
+    fetch_and_update_zones(public_ip, zones)
+
+
 def main():
     while True:
         try:
             if is_network_available():
                 public_ip = get_public_ip()
                 zones = get_zones(CLOUDFLARE_FQDNS)
-                for attempt in Retrying(stop=stop_after_attempt(3), wait=wait_fixed(10)):
-                    with attempt:
-                        fetch_and_update_zones(public_ip, zones)
+                try_update(public_ip, zones)
             else:
                 logging.error("Network not available. DNS records cannot be updated.")
         except Exception as e:
             logging.error(f"Unexpected error during update cycle: {e}")
 
+        # Touch heartbeat file so Docker health check can detect hangs
+        open(HEARTBEAT_FILE, "w").close()
         logging.info(f"Waiting {SLEEP} seconds before next check...")
         time.sleep(SLEEP)
 
