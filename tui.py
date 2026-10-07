@@ -4,7 +4,7 @@
 import os
 import sys
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, find_dotenv, load_dotenv, set_key
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -646,7 +646,7 @@ class TokenFormModal(ModalScreen):
 
 
 class TokenValueModal(ModalScreen):
-    """Show a token's secret, which Cloudflare returns only once."""
+    """Show a token's secret, which Cloudflare returns only once, and offer to save it."""
 
     DEFAULT_CSS = """
     TokenValueModal {
@@ -656,7 +656,7 @@ class TokenValueModal(ModalScreen):
         background: $surface;
         border: thick $success;
         padding: 1 3;
-        width: 84;
+        width: 90;
         height: auto;
     }
     #value-title {
@@ -665,11 +665,24 @@ class TokenValueModal(ModalScreen):
         color: $success;
         padding-bottom: 1;
     }
-    #value-note {
+    .value-note {
+        width: 100%;
         color: $text-muted;
-        padding: 1 0;
+        padding: 1 0 0 0;
+    }
+    #value-targets {
+        height: auto;
+        padding-top: 1;
+    }
+    .target-row {
+        height: 3;
+    }
+    .target-row Label {
+        width: 1fr;
+        padding-top: 1;
     }
     #value-buttons {
+        margin-top: 1;
         align: center middle;
         height: 3;
     }
@@ -678,17 +691,34 @@ class TokenValueModal(ModalScreen):
     }
     """
 
-    def __init__(self, name: str, value: str):
+    def __init__(self, name: str, value: str, targets: list[dict] | None = None, on_save=None):
         super().__init__()
         self.token_name = name
         self.value = value
+        self.targets = targets or []
+        self.on_save = on_save
+        self.warned = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="value-dialog"):
             yield Label(f"Token value — {self.token_name}", id="value-title")
             yield Input(value=self.value, id="token-value")
-            yield Label("Cloudflare shows this once. Store it now (e.g. in .env); "
-                        "after this it can only be rolled, not viewed.", id="value-note")
+            if self.targets:
+                yield Label("This token is used in the places below. Save the new value to each:",
+                            classes="value-note")
+                with Vertical(id="value-targets"):
+                    for i, target in enumerate(self.targets):
+                        with Horizontal(classes="target-row"):
+                            yield Label(target["label"])
+                            if target.get("path"):
+                                yield Button("Save here", variant="success", id=f"btn-save-target-{i}")
+                            else:
+                                yield Label("[dim]set outside a file; update it by hand[/dim]")
+                yield Label("Anything already running with the old value needs a restart "
+                            "(for the cf-ddns container: docker compose up -d).", classes="value-note")
+            else:
+                yield Label("Cloudflare shows this once. Store it now (e.g. in .env); "
+                            "after this it can only be rolled, not viewed.", classes="value-note")
             with Horizontal(id="value-buttons"):
                 yield Button("Copy", variant="primary", id="btn-copy")
                 yield Button("Done", id="btn-done")
@@ -698,10 +728,27 @@ class TokenValueModal(ModalScreen):
         self.app.copy_to_clipboard(self.value)
         self.notify("Copied via the terminal clipboard. If it didn't arrive, select the text instead.")
 
+    @on(Button.Pressed, ".target-row Button")
+    def on_save_target(self, event: Button.Pressed) -> None:
+        target = self.targets[int(event.button.id.rsplit("-", 1)[1])]
+        error = self.on_save(target, self.value) if self.on_save else "nowhere to save"
+        if error:
+            self.notify(f"Couldn't save to {target['label']}: {error}", severity="error")
+            return
+        event.button.label = "Saved ✓"
+        event.button.disabled = True
+        self.notify(f"Saved to {target['label']}")
+
     @on(Button.Pressed, "#btn-done")
     def on_done(self) -> None:
+        unsaved = [t for i, t in enumerate(self.targets) if t.get("path")
+                   and not self.query_one(f"#btn-save-target-{i}", Button).disabled]
+        if unsaved and not self.warned:
+            self.notify("Not saved everywhere yet; this value can't be shown again. "
+                        "Press Done again to close anyway.", severity="warning")
+            self.warned = True
+            return
         self.dismiss(None)
-
 
 class CFManagerApp(App):
     """Cloudflare Manager TUI."""
@@ -786,15 +833,18 @@ class CFManagerApp(App):
         Binding("x", "roll_token", "Roll secret"),
     ]
 
-    def __init__(self, api: CloudflareAPI, token_api: CloudflareAPI | None = None):
+    def __init__(self, api: CloudflareAPI, token_api: CloudflareAPI | None = None,
+                 token_sources: list[dict] | None = None):
         super().__init__()
         self.api = api
         # Token management needs "API Tokens Write"; keep that power off the DDNS token.
         self.token_api = token_api or api
+        # Where token secrets live on this machine; see token_sources() below.
+        self.token_sources = token_sources or []
         self.tokens: list[dict] = []
         self.perm_groups: list[dict] = []
         self.user_tag: str | None = None
-        self.tokens_in_use: dict[str, str] = {}
+        self.tokens_in_use: dict[str, list[dict]] = {}
         self.tokens_loaded = False
         self.zones: list[dict] = []
         self.records: list[dict] = []
@@ -1206,9 +1256,12 @@ class CFManagerApp(App):
         idx = table.cursor_row
         return self.tokens[idx] if self.tokens and 0 <= idx < len(self.tokens) else None
 
+    def _in_use_label(self, token_id: str) -> str:
+        return ", ".join(src["label"] for src in self.tokens_in_use.get(token_id, []))
+
     def _in_use_warning(self, token: dict) -> str:
-        label = self.tokens_in_use.get(token["id"])
-        return f"\n\nThis is the token in {label} here." if label else ""
+        label = self._in_use_label(token["id"])
+        return f"\n\nUsed in: {label}" if label else ""
 
     @work(exclusive=True, thread=True, group="tokens")
     def load_tokens(self) -> None:
@@ -1218,23 +1271,20 @@ class CFManagerApp(App):
         except Exception as e:
             self.call_from_thread(self._show_token_access_error, str(e))
             return
-        in_use: dict[str, list[str]] = {}
-        apis = [("CLOUDFLARE_API_TOKEN", self.api)]
-        if self.token_api is not self.api:
-            apis.append(("CLOUDFLARE_ADMIN_TOKEN", self.token_api))
-        for env_name, api in apis:
+        in_use: dict[str, list[dict]] = {}
+        for src in self.token_sources:
             try:
-                in_use.setdefault(api.verify_token()["id"], []).append(env_name)
+                token_id = CloudflareAPI(src["value"]).verify_token()["id"]
             except Exception:
-                pass
+                continue
+            in_use.setdefault(token_id, []).append(src)
         user_tag = tp.find_user_tag(tokens)
         if not user_tag:
             try:
                 user_tag = self.token_api.get_user_tag()
             except Exception:
                 pass
-        self.call_from_thread(self._populate_tokens, tokens, groups, user_tag,
-                              {k: " and ".join(v) for k, v in in_use.items()})
+        self.call_from_thread(self._populate_tokens, tokens, groups, user_tag, in_use)
 
     def _show_token_access_error(self, error: str) -> None:
         self.query_one("#tokens-table", DataTable).clear()
@@ -1248,7 +1298,7 @@ class CFManagerApp(App):
         self.query_one("#token-info", Label).update(f"[red]{error}[/red]\n\n{hint}".strip())
 
     def _populate_tokens(self, tokens: list[dict], groups: list[dict], user_tag: str | None,
-                         in_use: dict[str, str]) -> None:
+                         in_use: dict[str, list[dict]]) -> None:
         self.tokens_loaded = True
         self.tokens = sorted(tokens, key=lambda t: t.get("name", "").lower())
         self.perm_groups = groups
@@ -1290,7 +1340,7 @@ class CFManagerApp(App):
             f"Issued {(token.get('issued_on') or '?')[:10]} · last used {(token.get('last_used_on') or 'never')[:10]}",
         ]
         if token["id"] in self.tokens_in_use:
-            lines.append(f"[b]*[/b] In use here as {self.tokens_in_use[token['id']]}")
+            lines.append(f"[b]*[/b] Used in: {self._in_use_label(token['id'])}")
         info.update("\n".join(lines))
 
     @on(DataTable.RowHighlighted, "#tokens-table")
@@ -1376,18 +1426,80 @@ class CFManagerApp(App):
         except Exception as e:
             self.call_from_thread(self.notify, f"Failed to delete token: {e}", severity="error")
 
+    def _after_roll(self, token_id: str, name: str, value: str) -> None:
+        targets = self.tokens_in_use.get(token_id, [])
+        # The old secret is dead now; keep this session's clients working.
+        for src in targets:
+            if src.get("key") == "CLOUDFLARE_API_TOKEN":
+                self.api.set_token(value)
+            elif src.get("key") == "CLOUDFLARE_ADMIN_TOKEN":
+                self.token_api.set_token(value)
+        self.push_screen(TokenValueModal(name, value, targets, self._save_token_value))
+
+    def _save_token_value(self, src: dict, value: str) -> str | None:
+        """Write a new secret where the old one was stored. Returns an error, or None."""
+        try:
+            if src["kind"] == "env":
+                set_key(src["path"], src["key"], value, quote_mode="never")
+            else:
+                with open(src["path"], "w") as f:
+                    f.write(value + "\n")
+        except Exception as e:
+            return str(e)
+        src["value"] = value
+        return None
+
     @work(thread=True)
     def _roll_token(self, token_id: str, name: str) -> None:
         try:
             value = self.token_api.roll_token(token_id)
-            self.call_from_thread(self.push_screen, TokenValueModal(name, value))
+            self.call_from_thread(self._after_roll, token_id, name, value)
         except Exception as e:
             self.call_from_thread(self.notify, f"Failed to roll token: {e}", severity="error")
 
 
 
+def _short(path: str) -> str:
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+def token_sources(dotenv_path: str) -> list[dict]:
+    """Every place on this machine a Cloudflare token secret is kept.
+
+    .env keys, plus token files listed in CLOUDFLARE_TOKEN_FILES (comma-separated;
+    default ~/.config/cloudflare/token, used by the new-polr-app skill). The Tokens
+    tab marks matching tokens and offers to save a rolled secret back to each.
+    """
+    sources = []
+    in_file = dotenv_values(dotenv_path) if dotenv_path else {}
+    for key in ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ADMIN_TOKEN"):
+        value = os.getenv(key)
+        if not value:
+            continue
+        if key in in_file:
+            sources.append({"kind": "env", "key": key, "path": dotenv_path, "value": value,
+                            "label": f"{key} in {_short(dotenv_path)}"})
+        else:
+            sources.append({"kind": "env", "key": key, "path": None, "value": value,
+                            "label": f"{key} (environment)"})
+    for path in os.getenv("CLOUDFLARE_TOKEN_FILES", "~/.config/cloudflare/token").split(","):
+        path = os.path.expanduser(path.strip())
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path) as f:
+                value = f.read().strip()
+        except OSError:
+            continue
+        if value:
+            sources.append({"kind": "file", "path": path, "value": value, "label": _short(path)})
+    return sources
+
+
 def main():
-    load_dotenv()
+    dotenv_path = find_dotenv()
+    load_dotenv(dotenv_path)
     token = os.getenv("CLOUDFLARE_API_TOKEN")
     if not token:
         print(
@@ -1399,7 +1511,7 @@ def main():
     api = CloudflareAPI(token, account_id=account_id)
     admin_token = os.getenv("CLOUDFLARE_ADMIN_TOKEN")
     token_api = CloudflareAPI(admin_token, account_id=account_id) if admin_token else None
-    CFManagerApp(api, token_api).run()
+    CFManagerApp(api, token_api, token_sources(dotenv_path)).run()
 
 
 if __name__ == "__main__":

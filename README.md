@@ -33,7 +33,7 @@ CRON_SCHEDULE won't do anything with this method, but you can create your own cr
 
 1. **DNS**: browse zones; create, edit and delete records.
 2. **R2**: browse buckets and objects; create and delete them (needs `CLOUDFLARE_ACCOUNT_ID`).
-3. **Tokens**: list your user API tokens and see what each can do. `n` creates a token, `e`/Enter edits its permissions, expiry, client-IP allow-list and active state, `x` rolls its secret, and `d` deletes it. The editor has templates (e.g. a ready-made cf-ddns token) and a filterable permission picker. New and rolled secrets are shown once.
+3. **Tokens**: list your user API tokens and see what each can do. `n` creates a token, `e`/Enter edits its permissions, expiry, client-IP allow-list and active state, `x` rolls its secret, and `d` deletes it. The editor has templates (e.g. a ready-made cf-ddns token) and a filterable permission picker. New and rolled secrets are shown once. Tokens stored on this machine (the `.env` keys, plus files in `CLOUDFLARE_TOKEN_FILES`) are marked with `*` and where they're used; after a roll, a Save button writes the new secret back to each place.
 
 Managing tokens requires a token with **User > API Tokens > Edit**, which Cloudflare only grants through the dashboard's "Create Additional Tokens" template. Rather than giving the DDNS token that power, create one and set it as `CLOUDFLARE_ADMIN_TOKEN`; the Tokens tab uses it when present.
 
@@ -44,6 +44,7 @@ Managing tokens requires a token with **User > API Tokens > Edit**, which Cloudf
 * `CLOUDFLARE_RECORDS`: optional comma-separated record names; only these are kept pointed at home (blank = every A record in the listed zones)
 * `CLOUDFLARE_ACCOUNT_ID`: needed for R2 in the CLI and TUI, and for account-scoped choices in the token editor
 * `CLOUDFLARE_ADMIN_TOKEN`: optional token with User > API Tokens > Edit, used only by the TUI's Tokens tab
+* `CLOUDFLARE_TOKEN_FILES`: optional comma-separated files holding other token secrets, so the Tokens tab can show where each token is used (default `~/.config/cloudflare/token`)
 * `SLEEP`: how many seconds to wait between checks (default: 60)
 * `FORCE_UPDATE`: force updating the A records, even if they have the current IP address
 * `DRY_RUN`: set to "true" if you want to set the output the script without any changes being applied

@@ -11,10 +11,11 @@ PRIORITY_TYPES = {"MX", "SRV", "URI"}
 class CloudflareAPI:
     def __init__(self, token: str, account_id: str | None = None):
         self.account_id = account_id
-        self.headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+        self.headers = {"Content-Type": "application/json"}
+        self.set_token(token)
+
+    def set_token(self, token: str) -> None:
+        self.headers["Authorization"] = f"Bearer {token}"
 
     @staticmethod
     def _raise_for_status(r: requests.Response) -> None:
