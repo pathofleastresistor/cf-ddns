@@ -1,4 +1,4 @@
-"""Cloudflare API client for DNS record and R2 management."""
+"""Cloudflare API client for DNS records, R2 storage and API tokens."""
 
 import requests
 
@@ -16,11 +16,25 @@ class CloudflareAPI:
             "Content-Type": "application/json",
         }
 
+    @staticmethod
+    def _raise_for_status(r: requests.Response) -> None:
+        """Raise with Cloudflare's own error messages, not just the status code."""
+        if r.ok:
+            return
+        try:
+            errors = r.json().get("errors") or []
+        except ValueError:
+            errors = []
+        detail = "; ".join(f"{e.get('code')}: {e.get('message')}" for e in errors)
+        if detail:
+            raise requests.HTTPError(f"{r.status_code} {detail}", response=r)
+        r.raise_for_status()
+
     def _request(self, method: str, path: str, **kwargs) -> dict:
         r = requests.request(
             method, f"{CF_API_BASE}{path}", headers=self.headers, timeout=10, **kwargs
         )
-        r.raise_for_status()
+        self._raise_for_status(r)
         return r.json()
 
     def _r2_request(self, method: str, path: str, **kwargs) -> dict:
@@ -28,7 +42,7 @@ class CloudflareAPI:
         r = requests.request(
             method, f"{CF_API_BASE}{path}", headers=self.headers, timeout=10, **kwargs
         )
-        r.raise_for_status()
+        self._raise_for_status(r)
         if r.status_code == 204 or not r.content:
             return {}
         return r.json()
@@ -111,3 +125,42 @@ class CloudflareAPI:
         )
         r.raise_for_status()
         return r.content
+
+    # ------------------------------------------------------------------
+    # API tokens (user-owned). The calling token needs "API Tokens Write",
+    # which only the dashboard's "Create Additional Tokens" template grants.
+    # ------------------------------------------------------------------
+
+    def verify_token(self) -> dict:
+        return self._request("GET", "/user/tokens/verify").get("result", {})
+
+    def get_user_tag(self) -> str | None:
+        """The user id, needed for user-scoped permissions. Needs User Details Read."""
+        return self._request("GET", "/user").get("result", {}).get("id")
+
+    def list_tokens(self) -> list[dict]:
+        tokens: list[dict] = []
+        page = 1
+        while True:
+            data = self._request("GET", "/user/tokens", params={"per_page": 50, "page": page})
+            tokens.extend(data.get("result", []))
+            if page >= (data.get("result_info") or {}).get("total_pages", 1):
+                return tokens
+            page += 1
+
+    def list_permission_groups(self) -> list[dict]:
+        return self._request("GET", "/user/tokens/permission_groups").get("result", [])
+
+    def create_token(self, body: dict) -> dict:
+        """Returns the new token, including its secret "value" (shown only once)."""
+        return self._request("POST", "/user/tokens", json=body).get("result", {})
+
+    def update_token(self, token_id: str, body: dict) -> dict:
+        return self._request("PUT", f"/user/tokens/{token_id}", json=body).get("result", {})
+
+    def delete_token(self, token_id: str) -> dict:
+        return self._request("DELETE", f"/user/tokens/{token_id}").get("result", {})
+
+    def roll_token(self, token_id: str) -> str:
+        """Replace the token's secret; returns the new value. The old one stops working."""
+        return self._request("PUT", f"/user/tokens/{token_id}/value", json={}).get("result", "")

@@ -28,10 +28,22 @@ The repo includes a docker-compose.yml file that you can use to spin everything 
 
 CRON_SCHEDULE won't do anything with this method, but you can create your own crontab entry.
 
+#### Interactive manager (TUI)
+`python tui.py` opens a terminal UI with three tabs:
+
+1. **DNS**: browse zones; create, edit and delete records.
+2. **R2**: browse buckets and objects; create and delete them (needs `CLOUDFLARE_ACCOUNT_ID`).
+3. **Tokens**: list your user API tokens and see what each can do. `n` creates a token, `e`/Enter edits its permissions, expiry, client-IP allow-list and active state, `x` rolls its secret, and `d` deletes it. The editor has templates (e.g. a ready-made cf-ddns token) and a filterable permission picker. New and rolled secrets are shown once.
+
+Managing tokens requires a token with **User > API Tokens > Edit**, which Cloudflare only grants through the dashboard's "Create Additional Tokens" template. Rather than giving the DDNS token that power, create one and set it as `CLOUDFLARE_ADMIN_TOKEN`; the Tokens tab uses it when present.
+
 ### Environment Variables
 
 * `CLOUDFLARE_API_TOKEN`: the token you create in Cloudflare. Make sure the token is set up with Zone:Zone:Read and Zone:DNS:Edit
 * `CLOUDFLARE_FQDNS`: the list of FQDNs you want to update
+* `CLOUDFLARE_RECORDS`: optional comma-separated record names; only these are kept pointed at home (blank = every A record in the listed zones)
+* `CLOUDFLARE_ACCOUNT_ID`: needed for R2 in the CLI and TUI, and for account-scoped choices in the token editor
+* `CLOUDFLARE_ADMIN_TOKEN`: optional token with User > API Tokens > Edit, used only by the TUI's Tokens tab
 * `SLEEP`: how many seconds to wait between checks (default: 60)
 * `FORCE_UPDATE`: force updating the A records, even if they have the current IP address
 * `DRY_RUN`: set to "true" if you want to set the output the script without any changes being applied
