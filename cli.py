@@ -32,6 +32,7 @@ sys.path.insert(0, _HERE)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(_HERE, ".env"))
 
+import credentials
 from cloudflare import PRIORITY_TYPES, PROXIABLE_TYPES, CloudflareAPI
 
 
@@ -40,16 +41,16 @@ from cloudflare import PRIORITY_TYPES, PROXIABLE_TYPES, CloudflareAPI
 # ---------------------------------------------------------------------------
 
 def get_api() -> CloudflareAPI:
-    token = os.getenv("CLOUDFLARE_API_TOKEN")
+    token = credentials.manager_token()
     if not token:
-        _die("CLOUDFLARE_API_TOKEN not set in environment or .env")
-    return CloudflareAPI(token, account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID"))
+        _die(f"no token: set CLOUDFLARE_API_TOKEN or save one to {credentials.config_path('token')}")
+    return CloudflareAPI(token, account_id=credentials.account_id())
 
 
 def get_api_r2() -> CloudflareAPI:
     api = get_api()
     if not api.account_id:
-        _die("CLOUDFLARE_ACCOUNT_ID not set in environment or .env")
+        _die(f"no account id: set CLOUDFLARE_ACCOUNT_ID or save it to {credentials.config_path('account_id')}")
     return api
 
 

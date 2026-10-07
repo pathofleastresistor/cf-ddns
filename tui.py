@@ -15,6 +15,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
+import credentials
 import token_policy as tp
 from cloudflare import PRIORITY_TYPES, PROXIABLE_TYPES, CloudflareAPI
 
@@ -1292,7 +1293,7 @@ class CFManagerApp(App):
         hint = (
             "This token can't manage API tokens. In the Cloudflare dashboard, go to "
             "My Profile → API Tokens → Create Token and use the \"Create Additional Tokens\" template. "
-            "Put that token in .env as CLOUDFLARE_ADMIN_TOKEN and press r."
+            f"Save that token to {_short(credentials.config_path('admin_token'))} (chmod 600) and restart."
             if "9109" in error or "403" in error else ""
         )
         self.query_one("#token-info", Label).update(f"[red]{error}[/red]\n\n{hint}".strip())
@@ -1429,11 +1430,11 @@ class CFManagerApp(App):
     def _after_roll(self, token_id: str, name: str, value: str) -> None:
         targets = self.tokens_in_use.get(token_id, [])
         # The old secret is dead now; keep this session's clients working.
-        for src in targets:
-            if src.get("key") == "CLOUDFLARE_API_TOKEN":
-                self.api.set_token(value)
-            elif src.get("key") == "CLOUDFLARE_ADMIN_TOKEN":
-                self.token_api.set_token(value)
+        feeds = set().union(*(src.get("feeds", set()) for src in targets))
+        if "api" in feeds:
+            self.api.set_token(value)
+        if "admin" in feeds:
+            self.token_api.set_token(value)
         self.push_screen(TokenValueModal(name, value, targets, self._save_token_value))
 
     def _save_token_value(self, src: dict, value: str) -> str | None:
@@ -1464,26 +1465,31 @@ def _short(path: str) -> str:
     return "~" + path[len(home):] if path.startswith(home) else path
 
 
-def token_sources(dotenv_path: str) -> list[dict]:
+def token_sources(dotenv_path: str, api_token: str, admin_token: str | None) -> list[dict]:
     """Every place on this machine a Cloudflare token secret is kept.
 
-    .env keys, plus token files listed in CLOUDFLARE_TOKEN_FILES (comma-separated;
-    default ~/.config/cloudflare/token, used by the new-polr-app skill). The Tokens
-    tab marks matching tokens and offers to save a rolled secret back to each.
+    .env keys, plus token files: CLOUDFLARE_TOKEN_FILES (comma-separated), defaulting
+    to token and admin_token in the credentials config dir. The Tokens tab marks
+    matching tokens and offers to save a rolled secret back to each. "feeds" says
+    which of this session's clients ("api", "admin") uses that secret.
     """
+    def feeds(value: str) -> set[str]:
+        return {name for name, v in (("api", api_token), ("admin", admin_token)) if v and v == value}
+
     sources = []
     in_file = dotenv_values(dotenv_path) if dotenv_path else {}
-    for key in ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ADMIN_TOKEN"):
+    for key in ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_MANAGER_TOKEN", "CLOUDFLARE_ADMIN_TOKEN"):
         value = os.getenv(key)
         if not value:
             continue
-        if key in in_file:
-            sources.append({"kind": "env", "key": key, "path": dotenv_path, "value": value,
-                            "label": f"{key} in {_short(dotenv_path)}"})
-        else:
-            sources.append({"kind": "env", "key": key, "path": None, "value": value,
-                            "label": f"{key} (environment)"})
-    for path in os.getenv("CLOUDFLARE_TOKEN_FILES", "~/.config/cloudflare/token").split(","):
+        saved_in_file = key in in_file
+        sources.append({
+            "kind": "env", "key": key, "path": dotenv_path if saved_in_file else None, "value": value,
+            "label": f"{key} in {_short(dotenv_path)}" if saved_in_file else f"{key} (environment)",
+            "feeds": feeds(value),
+        })
+    default_files = f"{credentials.config_path('token')},{credentials.config_path('admin_token')}"
+    for path in os.getenv("CLOUDFLARE_TOKEN_FILES", default_files).split(","):
         path = os.path.expanduser(path.strip())
         if not path or not os.path.isfile(path):
             continue
@@ -1493,26 +1499,24 @@ def token_sources(dotenv_path: str) -> list[dict]:
         except OSError:
             continue
         if value:
-            sources.append({"kind": "file", "path": path, "value": value, "label": _short(path)})
+            sources.append({"kind": "file", "path": path, "value": value, "label": _short(path),
+                            "feeds": feeds(value)})
     return sources
 
 
 def main():
     dotenv_path = find_dotenv()
     load_dotenv(dotenv_path)
-    token = os.getenv("CLOUDFLARE_API_TOKEN")
+    token = credentials.manager_token()
     if not token:
-        print(
-            "Error: CLOUDFLARE_API_TOKEN not set in environment or .env file",
-            file=sys.stderr,
-        )
+        print(f"Error: no token. Set CLOUDFLARE_API_TOKEN or save one to {credentials.config_path('token')}",
+              file=sys.stderr)
         sys.exit(1)
-    account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+    account_id = credentials.account_id()
     api = CloudflareAPI(token, account_id=account_id)
-    admin_token = os.getenv("CLOUDFLARE_ADMIN_TOKEN")
-    token_api = CloudflareAPI(admin_token, account_id=account_id) if admin_token else None
-    CFManagerApp(api, token_api, token_sources(dotenv_path)).run()
-
+    admin = credentials.admin_token()
+    token_api = CloudflareAPI(admin, account_id=account_id) if admin else None
+    CFManagerApp(api, token_api, token_sources(dotenv_path, token, admin)).run()
 
 if __name__ == "__main__":
     main()
