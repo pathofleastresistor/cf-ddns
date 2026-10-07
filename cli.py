@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cloudflare DNS CLI — scriptable interface for managing DNS records.
+"""Cloudflare DNS CLI — scriptable interface for managing DNS records and R2.
 
 Can be run from any directory:
     python /path/to/cf-ddns/cli.py zones list
@@ -8,7 +8,16 @@ Can be run from any directory:
     python /path/to/cf-ddns/cli.py records update --zone example.com --id <id> --content 5.6.7.8
     python /path/to/cf-ddns/cli.py records delete --zone example.com --id <id>
 
+    python /path/to/cf-ddns/cli.py r2 buckets list
+    python /path/to/cf-ddns/cli.py r2 buckets create --name my-bucket
+    python /path/to/cf-ddns/cli.py r2 buckets delete --name my-bucket
+    python /path/to/cf-ddns/cli.py r2 objects list --bucket my-bucket
+    python /path/to/cf-ddns/cli.py r2 objects upload --bucket my-bucket --key path/to/file --file ./local.txt
+    python /path/to/cf-ddns/cli.py r2 objects download --bucket my-bucket --key path/to/file --out ./local.txt
+    python /path/to/cf-ddns/cli.py r2 objects delete --bucket my-bucket --key path/to/file
+
 Add --json to any command for machine-readable output.
+CLOUDFLARE_ACCOUNT_ID must be set for R2 commands.
 """
 
 import argparse
@@ -34,7 +43,14 @@ def get_api() -> CloudflareAPI:
     token = os.getenv("CLOUDFLARE_API_TOKEN")
     if not token:
         _die("CLOUDFLARE_API_TOKEN not set in environment or .env")
-    return CloudflareAPI(token)
+    return CloudflareAPI(token, account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID"))
+
+
+def get_api_r2() -> CloudflareAPI:
+    api = get_api()
+    if not api.account_id:
+        _die("CLOUDFLARE_ACCOUNT_ID not set in environment or .env")
+    return api
 
 
 def resolve_zone(api: CloudflareAPI, zone_arg: str) -> dict:
@@ -187,6 +203,88 @@ def cmd_records_delete(args) -> None:
 
 
 # ---------------------------------------------------------------------------
+# R2 command handlers
+# ---------------------------------------------------------------------------
+
+def cmd_r2_buckets_list(args) -> None:
+    api = get_api_r2()
+    buckets = api.list_r2_buckets()
+    if args.json:
+        _out(buckets, True)
+    else:
+        _out(
+            [{"name": b["name"], "location": b.get("location", ""), "created": b.get("creation_date", "")} for b in buckets],
+            False,
+            ["name", "location", "created"],
+        )
+
+
+def cmd_r2_buckets_create(args) -> None:
+    api = get_api_r2()
+    result = api.create_r2_bucket(args.name, location=args.location)
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"created: {args.name}")
+
+
+def cmd_r2_buckets_delete(args) -> None:
+    api = get_api_r2()
+    api.delete_r2_bucket(args.name)
+    if args.json:
+        print(json.dumps({"name": args.name}, indent=2))
+    else:
+        print(f"deleted: {args.name}")
+
+
+def cmd_r2_objects_list(args) -> None:
+    api = get_api_r2()
+    objects = api.list_r2_objects(args.bucket, prefix=args.prefix or "")
+    if args.json:
+        _out(objects, True)
+    else:
+        _out(
+            [{"key": o["key"], "size": o.get("size", ""), "modified": o.get("uploaded", "")} for o in objects],
+            False,
+            ["key", "size", "modified"],
+        )
+
+
+def cmd_r2_objects_upload(args) -> None:
+    api = get_api_r2()
+    with open(args.file, "rb") as f:
+        data = f.read()
+    import mimetypes
+    content_type = mimetypes.guess_type(args.file)[0] or "application/octet-stream"
+    api.upload_r2_object(args.bucket, args.key, data, content_type=content_type)
+    if args.json:
+        print(json.dumps({"bucket": args.bucket, "key": args.key}, indent=2))
+    else:
+        print(f"uploaded: {args.key} → {args.bucket}")
+
+
+def cmd_r2_objects_download(args) -> None:
+    api = get_api_r2()
+    data = api.download_r2_object(args.bucket, args.key)
+    out_path = args.out or args.key.split("/")[-1]
+    with open(out_path, "wb") as f:
+        f.write(data)
+    if args.json:
+        print(json.dumps({"bucket": args.bucket, "key": args.key, "out": out_path}, indent=2))
+    else:
+        print(f"downloaded: {args.key} → {out_path}")
+
+
+def cmd_r2_objects_delete(args) -> None:
+    api = get_api_r2()
+    api.delete_r2_object(args.bucket, args.key)
+    if args.json:
+        print(json.dumps({"bucket": args.bucket, "key": args.key}, indent=2))
+    else:
+        print(f"deleted: {args.key}")
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -252,6 +350,52 @@ def build_parser() -> argparse.ArgumentParser:
     rd.add_argument("--zone", required=True, metavar="NAME_OR_ID")
     rd.add_argument("--id", required=True, metavar="RECORD_ID")
     rd.set_defaults(func=cmd_records_delete)
+
+    # -- r2 ------------------------------------------------------------------
+    r2_p = sub.add_parser("r2", help="Manage R2 storage")
+    r2_sub = r2_p.add_subparsers(dest="r2_resource", metavar="<resource>", required=True)
+
+    # r2 buckets
+    r2_buckets_p = r2_sub.add_parser("buckets", help="Manage R2 buckets")
+    r2_buckets_sub = r2_buckets_p.add_subparsers(dest="action", metavar="<action>", required=True)
+
+    r2_bl = r2_buckets_sub.add_parser("list", help="List R2 buckets", parents=[common])
+    r2_bl.set_defaults(func=cmd_r2_buckets_list)
+
+    r2_bc = r2_buckets_sub.add_parser("create", help="Create an R2 bucket", parents=[common])
+    r2_bc.add_argument("--name", required=True, metavar="NAME")
+    r2_bc.add_argument("--location", metavar="HINT", help="Location hint (e.g. WNAM, ENAM, WEUR, EEUR, APAC)")
+    r2_bc.set_defaults(func=cmd_r2_buckets_create)
+
+    r2_bd = r2_buckets_sub.add_parser("delete", help="Delete an R2 bucket", parents=[common])
+    r2_bd.add_argument("--name", required=True, metavar="NAME")
+    r2_bd.set_defaults(func=cmd_r2_buckets_delete)
+
+    # r2 objects
+    r2_objects_p = r2_sub.add_parser("objects", help="Manage R2 objects")
+    r2_objects_sub = r2_objects_p.add_subparsers(dest="action", metavar="<action>", required=True)
+
+    r2_ol = r2_objects_sub.add_parser("list", help="List objects in a bucket", parents=[common])
+    r2_ol.add_argument("--bucket", required=True, metavar="NAME")
+    r2_ol.add_argument("--prefix", metavar="PREFIX", help="Filter by key prefix")
+    r2_ol.set_defaults(func=cmd_r2_objects_list)
+
+    r2_ou = r2_objects_sub.add_parser("upload", help="Upload a file to R2", parents=[common])
+    r2_ou.add_argument("--bucket", required=True, metavar="NAME")
+    r2_ou.add_argument("--key", required=True, metavar="KEY")
+    r2_ou.add_argument("--file", required=True, metavar="PATH", help="Local file to upload")
+    r2_ou.set_defaults(func=cmd_r2_objects_upload)
+
+    r2_od = r2_objects_sub.add_parser("download", help="Download an object from R2", parents=[common])
+    r2_od.add_argument("--bucket", required=True, metavar="NAME")
+    r2_od.add_argument("--key", required=True, metavar="KEY")
+    r2_od.add_argument("--out", metavar="PATH", help="Local output path (default: filename from key)")
+    r2_od.set_defaults(func=cmd_r2_objects_download)
+
+    r2_odel = r2_objects_sub.add_parser("delete", help="Delete an object from R2", parents=[common])
+    r2_odel.add_argument("--bucket", required=True, metavar="NAME")
+    r2_odel.add_argument("--key", required=True, metavar="KEY")
+    r2_odel.set_defaults(func=cmd_r2_objects_delete)
 
     return parser
 

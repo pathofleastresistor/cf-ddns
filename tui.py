@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cloudflare DNS Manager — interactive TUI for viewing and managing DNS records."""
+"""Cloudflare Manager — interactive TUI for managing DNS records and R2 storage."""
 
 import os
 import sys
@@ -10,7 +10,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Select, Switch
+from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Select, Switch, TabbedContent, TabPane
 
 from cloudflare import PRIORITY_TYPES, PROXIABLE_TYPES, CloudflareAPI
 
@@ -220,10 +220,84 @@ class ConfirmModal(ModalScreen):
         self.dismiss(False)
 
 
-class DNSManagerApp(App):
-    """Cloudflare DNS Manager TUI."""
+class BucketCreateModal(ModalScreen):
+    """Create a new R2 bucket."""
 
-    TITLE = "CF DNS Manager"
+    DEFAULT_CSS = """
+    BucketCreateModal {
+        align: center middle;
+    }
+    #bucket-dialog {
+        background: $surface;
+        border: thick $primary;
+        padding: 1 3;
+        width: 54;
+        height: auto;
+    }
+    #bucket-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        padding-bottom: 1;
+    }
+    .field-row {
+        height: 3;
+        align: left middle;
+    }
+    .field-label {
+        width: 12;
+        text-align: right;
+        padding-right: 1;
+        padding-top: 1;
+        color: $text-muted;
+    }
+    .field-row Input {
+        width: 1fr;
+    }
+    #bucket-buttons {
+        margin-top: 1;
+        align: center middle;
+        height: 3;
+    }
+    #bucket-buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="bucket-dialog"):
+            yield Label("New R2 Bucket", id="bucket-title")
+            with Horizontal(classes="field-row"):
+                yield Label("Name:", classes="field-label")
+                yield Input(placeholder="my-bucket", id="field-bucket-name")
+            with Horizontal(classes="field-row"):
+                yield Label("Location:", classes="field-label")
+                yield Input(placeholder="WNAM, ENAM, WEUR… (optional)", id="field-bucket-location")
+            with Horizontal(id="bucket-buttons"):
+                yield Button("Create", variant="primary", id="btn-save")
+                yield Button("Cancel", id="btn-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#field-bucket-name", Input).focus()
+
+    @on(Button.Pressed, "#btn-cancel")
+    def on_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#btn-save")
+    def on_save(self) -> None:
+        name = self.query_one("#field-bucket-name", Input).value.strip()
+        if not name:
+            self.notify("Bucket name is required", severity="warning")
+            return
+        location = self.query_one("#field-bucket-location", Input).value.strip() or None
+        self.dismiss({"name": name, "location": location})
+
+
+class CFManagerApp(App):
+    """Cloudflare Manager TUI."""
+
+    TITLE = "CF Manager"
 
     DEFAULT_CSS = """
     Screen {
@@ -242,6 +316,15 @@ class DNSManagerApp(App):
         width: 1fr;
         border: round $primary;
     }
+    #buckets-panel {
+        width: 34;
+        border: round $primary;
+        margin-right: 1;
+    }
+    #objects-panel {
+        width: 1fr;
+        border: round $primary;
+    }
     .panel-title {
         background: $primary;
         color: $text;
@@ -256,16 +339,23 @@ class DNSManagerApp(App):
     #records-table {
         height: 1fr;
     }
+    #buckets-table {
+        height: 1fr;
+    }
+    #objects-table {
+        height: 1fr;
+    }
     """
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
-        Binding("n", "new_record", "New"),
-        Binding("e", "edit_record", "Edit"),
-        Binding("d", "delete_record", "Delete"),
-        Binding("escape", "focus_zones", "Zones", show=False),
-        Binding("left", "focus_zones", "Zones", show=False),
+        Binding("n", "new_item", "New"),
+        Binding("e", "edit_record", "Edit", show=True),
+        Binding("d", "delete_item", "Delete"),
+        Binding("h", "focus_left", "Left panel", show=False),
+        Binding("1", "switch_tab('dns')", "1:DNS"),
+        Binding("2", "switch_tab('r2')", "2:R2"),
     ]
 
     def __init__(self, api: CloudflareAPI):
@@ -274,16 +364,29 @@ class DNSManagerApp(App):
         self.zones: list[dict] = []
         self.records: list[dict] = []
         self.selected_zone: dict | None = None
+        self.buckets: list[dict] = []
+        self.objects: list[dict] = []
+        self.selected_bucket: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Horizontal(id="main"):
-            with Vertical(id="zones-panel"):
-                yield Label("Zones", classes="panel-title")
-                yield DataTable(id="zones-table", cursor_type="row", zebra_stripes=True)
-            with Vertical(id="records-panel"):
-                yield Label("DNS Records", id="records-title", classes="panel-title")
-                yield DataTable(id="records-table", cursor_type="row", zebra_stripes=True)
+        with TabbedContent(id="tabs"):
+            with TabPane("DNS", id="dns"):
+                with Horizontal(id="main"):
+                    with Vertical(id="zones-panel"):
+                        yield Label("Zones", classes="panel-title")
+                        yield DataTable(id="zones-table", cursor_type="row", zebra_stripes=True)
+                    with Vertical(id="records-panel"):
+                        yield Label("DNS Records", id="records-title", classes="panel-title")
+                        yield DataTable(id="records-table", cursor_type="row", zebra_stripes=True)
+            with TabPane("R2", id="r2"):
+                with Horizontal(id="r2-main"):
+                    with Vertical(id="buckets-panel"):
+                        yield Label("Buckets", classes="panel-title")
+                        yield DataTable(id="buckets-table", cursor_type="row", zebra_stripes=True)
+                    with Vertical(id="objects-panel"):
+                        yield Label("Objects", id="objects-title", classes="panel-title")
+                        yield DataTable(id="objects-table", cursor_type="row", zebra_stripes=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -297,7 +400,17 @@ class DNSManagerApp(App):
         records_table.add_column("TTL", key="ttl")
         records_table.add_column("Prx", key="proxied")
 
+        buckets_table = self.query_one("#buckets-table", DataTable)
+        buckets_table.add_column("Bucket Name", key="name")
+
+        objects_table = self.query_one("#objects-table", DataTable)
+        objects_table.add_column("Key", key="key")
+        objects_table.add_column("Size", key="size")
+        objects_table.add_column("Modified", key="modified")
+
         self.load_zones()
+        if self.api.account_id:
+            self.load_buckets()
 
     @work(exclusive=True, thread=True)
     def load_zones(self) -> None:
@@ -359,6 +472,22 @@ class DNSManagerApp(App):
     def on_zone_selected(self) -> None:
         self.query_one("#records-table", DataTable).focus()
 
+    @on(DataTable.RowHighlighted, "#buckets-table")
+    def on_bucket_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        idx = event.cursor_row
+        if 0 <= idx < len(self.buckets):
+            bucket = self.buckets[idx]
+            if self.selected_bucket != bucket["name"]:
+                self.selected_bucket = bucket["name"]
+                self.load_objects(bucket["name"])
+
+    @on(DataTable.RowSelected, "#buckets-table")
+    def on_bucket_selected(self) -> None:
+        self.query_one("#objects-table", DataTable).focus()
+
+    def _active_tab(self) -> str:
+        return self.query_one(TabbedContent).active
+
     def _selected_record(self) -> dict | None:
         table = self.query_one("#records-table", DataTable)
         if not self.records or table.row_count == 0:
@@ -366,19 +495,51 @@ class DNSManagerApp(App):
         idx = table.cursor_row
         return self.records[idx] if 0 <= idx < len(self.records) else None
 
-    def action_focus_zones(self) -> None:
-        self.query_one("#zones-table", DataTable).focus()
+    def _selected_object(self) -> dict | None:
+        table = self.query_one("#objects-table", DataTable)
+        if not self.objects or table.row_count == 0:
+            return None
+        idx = table.cursor_row
+        return self.objects[idx] if 0 <= idx < len(self.objects) else None
+
+    def action_focus_left(self) -> None:
+        if self._active_tab() == "r2":
+            self.query_one("#buckets-table", DataTable).focus()
+        else:
+            self.query_one("#zones-table", DataTable).focus()
+
+    def action_switch_tab(self, tab: str) -> None:
+        self.query_one(TabbedContent).active = tab
 
     def action_refresh(self) -> None:
-        self.load_zones()
+        if self._active_tab() == "r2":
+            self.load_buckets()
+            if self.selected_bucket:
+                self.load_objects(self.selected_bucket)
+        else:
+            self.load_zones()
 
-    def action_new_record(self) -> None:
+    def action_new_item(self) -> None:
+        if self._active_tab() == "r2":
+            self._action_new_bucket()
+        else:
+            self._action_new_record()
+
+    def _action_new_record(self) -> None:
         if not self.selected_zone:
             self.notify("Select a zone first", severity="warning")
             return
         self.push_screen(RecordFormModal(self.selected_zone["name"]), self._on_form_result)
 
+    def _action_new_bucket(self) -> None:
+        if not self.api.account_id:
+            self.notify("CLOUDFLARE_ACCOUNT_ID not set", severity="error")
+            return
+        self.push_screen(BucketCreateModal(), self._on_bucket_create_result)
+
     def action_edit_record(self) -> None:
+        if self._active_tab() != "dns":
+            return
         record = self._selected_record()
         if not record or not self.selected_zone:
             self.notify("Select a record to edit", severity="warning")
@@ -388,7 +549,13 @@ class DNSManagerApp(App):
             self._on_form_result,
         )
 
-    def action_delete_record(self) -> None:
+    def action_delete_item(self) -> None:
+        if self._active_tab() == "r2":
+            self._action_delete_r2()
+        else:
+            self._action_delete_record()
+
+    def _action_delete_record(self) -> None:
         record = self._selected_record()
         if not record or not self.selected_zone:
             self.notify("Select a record to delete", severity="warning")
@@ -396,8 +563,34 @@ class DNSManagerApp(App):
         msg = f"Delete '{record['name']}' ({record['type']})?\n\nThis cannot be undone."
         self.push_screen(
             ConfirmModal(msg),
-            lambda confirmed: self._on_delete_confirmed(confirmed, record),
+            lambda confirmed: self._on_delete_record_confirmed(confirmed, record),
         )
+
+    def _action_delete_r2(self) -> None:
+        # If focus is on objects table, delete object; otherwise delete bucket
+        focused = self.focused
+        objects_table = self.query_one("#objects-table", DataTable)
+        if focused is objects_table:
+            obj = self._selected_object()
+            if not obj or not self.selected_bucket:
+                self.notify("Select an object to delete", severity="warning")
+                return
+            msg = f"Delete object '{obj['key']}' from '{self.selected_bucket}'?\n\nThis cannot be undone."
+            self.push_screen(
+                ConfirmModal(msg),
+                lambda confirmed: self._on_delete_object_confirmed(confirmed, obj),
+            )
+        else:
+            idx = self.query_one("#buckets-table", DataTable).cursor_row
+            if not self.buckets or not (0 <= idx < len(self.buckets)):
+                self.notify("Select a bucket to delete", severity="warning")
+                return
+            bucket = self.buckets[idx]
+            msg = f"Delete bucket '{bucket['name']}'?\n\nThis cannot be undone."
+            self.push_screen(
+                ConfirmModal(msg),
+                lambda confirmed: self._on_delete_bucket_confirmed(confirmed, bucket["name"]),
+            )
 
     def _on_form_result(self, result: dict | None) -> None:
         if not result or not self.selected_zone:
@@ -408,9 +601,22 @@ class DNSManagerApp(App):
         else:
             self._create_record(zone_id, result["data"])
 
-    def _on_delete_confirmed(self, confirmed: bool | None, record: dict) -> None:
+    def _on_bucket_create_result(self, result: dict | None) -> None:
+        if not result:
+            return
+        self._create_bucket(result["name"], result.get("location"))
+
+    def _on_delete_record_confirmed(self, confirmed: bool | None, record: dict) -> None:
         if confirmed and self.selected_zone:
             self._delete_record(self.selected_zone["id"], record["id"])
+
+    def _on_delete_bucket_confirmed(self, confirmed: bool | None, name: str) -> None:
+        if confirmed:
+            self._delete_bucket(name)
+
+    def _on_delete_object_confirmed(self, confirmed: bool | None, obj: dict) -> None:
+        if confirmed and self.selected_bucket:
+            self._delete_object(self.selected_bucket, obj["key"])
 
     @work(thread=True)
     def _create_record(self, zone_id: str, data: dict) -> None:
@@ -439,6 +645,76 @@ class DNSManagerApp(App):
         except Exception as e:
             self.call_from_thread(self.notify, f"Failed to delete record: {e}", severity="error")
 
+    # ------------------------------------------------------------------
+    # R2 workers
+    # ------------------------------------------------------------------
+
+    @work(exclusive=True, thread=True)
+    def load_buckets(self) -> None:
+        try:
+            buckets = self.api.list_r2_buckets()
+            self.call_from_thread(self._populate_buckets, buckets)
+        except Exception as e:
+            self.call_from_thread(self.notify, f"Failed to load buckets: {e}", severity="error")
+
+    def _populate_buckets(self, buckets: list[dict]) -> None:
+        self.buckets = buckets
+        table = self.query_one("#buckets-table", DataTable)
+        table.clear()
+        for b in buckets:
+            table.add_row(b["name"], key=b["name"])
+        if buckets and not self.selected_bucket:
+            self.selected_bucket = buckets[0]["name"]
+            self.load_objects(buckets[0]["name"])
+
+    @work(exclusive=True, thread=True)
+    def load_objects(self, bucket: str) -> None:
+        try:
+            objects = self.api.list_r2_objects(bucket)
+            self.call_from_thread(self._populate_objects, objects, bucket)
+        except Exception as e:
+            self.call_from_thread(self.notify, f"Failed to load objects: {e}", severity="error")
+
+    def _populate_objects(self, objects: list[dict], bucket: str) -> None:
+        self.objects = objects
+        table = self.query_one("#objects-table", DataTable)
+        table.clear()
+        for o in objects:
+            size = str(o.get("size", ""))
+            modified = o.get("uploaded", "")
+            table.add_row(o["key"], size, modified, key=o["key"])
+        self.query_one("#objects-title", Label).update(f"Objects — {bucket}")
+
+    @work(thread=True)
+    def _create_bucket(self, name: str, location: str | None) -> None:
+        try:
+            self.api.create_r2_bucket(name, location=location)
+            self.call_from_thread(self.notify, f"Bucket '{name}' created")
+            self.call_from_thread(self.load_buckets)
+        except Exception as e:
+            self.call_from_thread(self.notify, f"Failed to create bucket: {e}", severity="error")
+
+    @work(thread=True)
+    def _delete_bucket(self, name: str) -> None:
+        try:
+            self.api.delete_r2_bucket(name)
+            self.call_from_thread(self.notify, f"Bucket '{name}' deleted")
+            if self.selected_bucket == name:
+                self.selected_bucket = None
+                self.call_from_thread(self._populate_objects, [], name)
+            self.call_from_thread(self.load_buckets)
+        except Exception as e:
+            self.call_from_thread(self.notify, f"Failed to delete bucket: {e}", severity="error")
+
+    @work(thread=True)
+    def _delete_object(self, bucket: str, key: str) -> None:
+        try:
+            self.api.delete_r2_object(bucket, key)
+            self.call_from_thread(self.notify, f"Deleted '{key}'")
+            self.call_from_thread(self.load_objects, bucket)
+        except Exception as e:
+            self.call_from_thread(self.notify, f"Failed to delete object: {e}", severity="error")
+
 
 def main():
     load_dotenv()
@@ -449,7 +725,8 @@ def main():
             file=sys.stderr,
         )
         sys.exit(1)
-    DNSManagerApp(CloudflareAPI(token)).run()
+    account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+    CFManagerApp(CloudflareAPI(token, account_id=account_id)).run()
 
 
 if __name__ == "__main__":
